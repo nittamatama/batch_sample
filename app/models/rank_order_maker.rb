@@ -20,7 +20,7 @@ class RankOrderMaker
 
   def users_sorted_by_score
     User.all
-      .select { |user| user.total_score.nonezero? }
+      .select { |user| user.total_score.nonzero? }
       .sort_by { |user| user.total_score * -1 }
   end
 end
