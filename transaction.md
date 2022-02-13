@@ -55,4 +55,46 @@
   - MYSQL8.0だとトランザクションで`BEGIN;`使えるかも
     - `ROLLBACK;`は`COMMIT;`と同じで終了する際に使用する
     ロールバック前から`BEGIN;`までの処理を消してくれる
+  
+  - バッチ処理にトランザクション導入
+    - `bin/rails log:clear`
+      - log/development.logなどのログファイルを削除し、これまでに蓄積されたログをリセット
+        - `$ bin/rails ranks:chapter3:update`を実行し、再度バッチを回す
+        - 実は、Railsは更新のSQLを実行するときに暗黙的にトランザクションを使用しています。
+          ただし、更新のSQLが実行される度にトランザクションが開始されるため、バッチ処理のような複数の更新をひとつの更新としてまとめて確定させたい処理としては適切ではないことがあります。
+          - `Rank.transaction do~end`でトランザクションしたい部分を囲む
+            - ![railstransaction](https://techpit-market-prod.s3.amazonaws.com/uploads/part_attachment/file/25291/29eeffbe-53e0-43b6-b0e0-a8b5fe1e1aad.png) transaction
+            - WebアプリケーションをRailsで構築すると、テーブルの1行を更新して終了するといったシンプルな更新のみを取り扱うケースではトランザクションは必要ありませんが、
+            多くのデータと複数のテーブルにまたがって更新の整合性が求められるようなバッチ処理ではトランザクションがなくてはならない機能
+    - `less -R log/development.log`
+      - -Rオプションはテキスト内のANSI エスケープシーケンスを有効にした状態で読み込み、設定に応じて色などのフォーマットを整えた状態で表示します
+  
+  - バッチ処理でロールバックを実行する
+    - ActiveRecordにおいてコード内の任意のタイミングでロールバックを実行するには`raise ActiveRecord::Rollback`を実行
+    - `mysql -h 127.0.0.1 -u batch_user --port 3307 -p batch_dev -e'SELECT count(*) from ranks;'` いちいち立ち上げなくて良い便利
+    - 意図的なロールバック
+      - ![Rollback](https://techpit-market-prod.s3.amazonaws.com/uploads/part_attachment/file/25293/fe208f8f-fbb4-48cc-9232-ff001a569882.png)rollback
+    - バッチ処理が異常終了した際のロールバック
+      - `raise ActiveRecord::Rollback`が書かれていない場合
+        - 使用しているRank.transactionのようにActiveRecordによるtransactionメソッドを使用すると、
+        そのメソッドに渡したブロックの中で異常終了が発生した場合、自動的にROLLBACKが発行される
+        - もしtransactionメソッドを使用しない状態でcreate_rankのようなタイプミスによる異常終了が発生した場合、
+        Rank.delete_allの実行結果はすぐに確定となり、異常終了したときにはranksテーブルのデータが全て消えた状態でバッチ処理が終了してしまいます。
+提供しているサービスの要件によっては致命的な状況に陥ってしまう場合があり
+          - ![異常終了のrollback](https://techpit-market-prod.s3.amazonaws.com/uploads/part_attachment/file/25294/0ba19fc9-fd2b-4d41-9489-5768f250a038.png) rollback
 
+
+```
+def update_all
+  Rank.transaction do
+    # 現在のランキング情報をリセット
+    Rank.delete_all
+
+    # ユーザーごとのスコア合計を降順に並べ替え、そこからランキング情報を再作成する
+    create_ranks
+    # ====== ここから追加 ======
+    raise ActiveRecord::Rollback
+    # ====== ここまで追加 ======
+  end
+end
+```
